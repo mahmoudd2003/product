@@ -2,40 +2,32 @@ import os
 import json
 import time
 import hashlib
-
 import pandas as pd
 import streamlit as st
 from openai import OpenAI
 
-# ---------------------------
-# UI
-# ---------------------------
-st.set_page_config(page_title="CSV → OpenAI → CSV (Titles & Descriptions)", layout="wide")
-st.title("توليد عناوين وأوصاف المنتجات من CSV باستخدام OpenAI")
+# =========================
+# PAGE
+# =========================
+st.set_page_config(page_title="Product Content Generator", layout="wide")
+st.title("مولّد عناوين وأوصاف المنتجات (CSV + إدخال مباشر)")
 
-st.caption("ارفع ملف CSV → اختر الأعمدة → ولّد العنوان والوصف → نزّل CSV الناتج")
+st.caption("اختر طريقة الإدخال → ولّد العنوان والوصف → نزّل CSV الناتج")
 
-# ---------------------------
-# Secrets / API Key
-# ---------------------------
-# Streamlit Community Cloud: ضع المفتاح في Secrets (Manage app → Settings → Secrets)
-# محليًا: ضع .streamlit/secrets.toml ولا ترفعه على GitHub
-api_key = None
-if "OPENAI_API_KEY" in st.secrets:
-    api_key = st.secrets["OPENAI_API_KEY"]
-else:
-    api_key = os.getenv("OPENAI_API_KEY")
-
+# =========================
+# API KEY (Streamlit Secrets)
+# =========================
+api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 if not api_key:
-    st.error("مفتاح OPENAI_API_KEY غير موجود. أضفه في Streamlit Secrets أو كمتغير بيئة.")
+    st.error("OPENAI_API_KEY غير موجود. أضفه في Streamlit Secrets أو كمتغير بيئة.")
     st.stop()
 
 client = OpenAI(api_key=api_key)
 
-# ---------------------------
-# Settings
-# ---------------------------
-MODEL = st.selectbox("اختر الموديل", ["gpt-4.1-mini", "gpt-4.1"], index=0)
+# =========================
+# SETTINGS
+# =========================
+MODEL = st.selectbox("الموديل", ["gpt-4.1-mini", "gpt-4.1"], index=0)
 temperature = st.slider("Temperature", 0.0, 1.0, 0.7, 0.05)
 
 SYSTEM_PROMPT = """أنت خبير محتوى منتجات لسوبرماركت عربي كبير.
@@ -58,9 +50,9 @@ JSON_SCHEMA = {
     },
 }
 
-# ---------------------------
-# Helpers
-# ---------------------------
+# =========================
+# HELPERS
+# =========================
 def norm(x):
     return str(x).strip() if x is not None else ""
 
@@ -107,7 +99,6 @@ def build_user_input(row: dict) -> str:
    - ثم "الاستخدامات:" 3 نقاط (إن لم تتوفر، استنتج استخدامات منطقية بدون ادعاءات)
    - ثم "المواصفات:" نقاط قصيرة (الماركة/النوع/الحجم/المنشأ/التخزين إن توفر)
 """)
-
     return "\n".join(parts).strip()
 
 def call_openai_structured(user_input: str, max_retries: int = 6) -> dict:
@@ -119,12 +110,7 @@ def call_openai_structured(user_input: str, max_retries: int = 6) -> dict:
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_input},
                 ],
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "json_schema": JSON_SCHEMA
-                    }
-                },
+                text={"format": {"type": "json_schema", "json_schema": JSON_SCHEMA}},
                 temperature=temperature,
             )
             return json.loads(resp.output_text)
@@ -133,49 +119,98 @@ def call_openai_structured(user_input: str, max_retries: int = 6) -> dict:
             time.sleep(wait)
     raise RuntimeError("Failed after retries")
 
-# ---------------------------
-# Upload CSV
-# ---------------------------
-uploaded = st.file_uploader("ارفع ملف CSV", type=["csv"])
+def to_dataframe_from_list(lines: str) -> pd.DataFrame:
+    items = []
+    for ln in (lines or "").splitlines():
+        ln = ln.strip()
+        if ln:
+            items.append({"raw_name": ln})
+    return pd.DataFrame(items)
 
-if uploaded:
-    df = pd.read_csv(uploaded, encoding="utf-8-sig")
-    st.success(f"تم تحميل الملف. عدد الصفوف: {len(df):,}")
+def to_dataframe_from_text_csv(csv_text: str) -> pd.DataFrame:
+    # يعتمد على pandas لقراءة نص CSV من مربع النص
+    import io
+    return pd.read_csv(io.StringIO(csv_text), encoding="utf-8")
 
-    st.subheader("تحديد الأعمدة")
+# =========================
+# INPUT MODE
+# =========================
+mode = st.radio(
+    "اختر طريقة إدخال المنتجات",
+    ["إدخال مباشر (كل سطر منتج)", "لصق CSV كنص", "رفع ملف CSV"],
+    horizontal=True
+)
+
+df = None
+
+if mode == "إدخال مباشر (كل سطر منتج)":
+    st.subheader("الصق المنتجات هنا")
+    st.caption("كل سطر = اسم منتج خام. مثال: المراعي حليب كامل الدسم 1 لتر")
+    text = st.text_area("قائمة المنتجات", height=220, placeholder="اكتب/الصق المنتجات هنا...")
+    df = to_dataframe_from_list(text)
+
+elif mode == "لصق CSV كنص":
+    st.subheader("الصق محتوى CSV هنا")
+    st.caption("الصق CSV كامل مع الهيدر (مثال: raw_name,brand,product_type,size,unit ...)")
+    csv_text = st.text_area("CSV نصّي", height=260, placeholder="raw_name,brand,product_type,size,unit\n...")
+    if csv_text.strip():
+        try:
+            df = to_dataframe_from_text_csv(csv_text)
+        except Exception as e:
+            st.error(f"خطأ في قراءة CSV النصي: {e}")
+            df = None
+
+else:
+    uploaded = st.file_uploader("ارفع ملف CSV", type=["csv"])
+    if uploaded:
+        df = pd.read_csv(uploaded, encoding="utf-8-sig")
+
+# =========================
+# COLUMN MAPPING
+# =========================
+if df is not None:
+    st.divider()
+    st.success(f"عدد المنتجات المحمّلة: {len(df):,}")
+
+    if len(df) == 0:
+        st.warning("لا يوجد أي منتجات بعد. أضف منتجات ثم تابع.")
+        st.stop()
+
     cols = list(df.columns)
 
-    col_name = st.selectbox("عمود اسم المنتج (raw_name أو name)", cols, index=0)
-    col_brand = st.selectbox("عمود الماركة (اختياري)", [""] + cols, index=0)
-    col_type = st.selectbox("عمود نوع المنتج (اختياري)", [""] + cols, index=0)
-    col_feature = st.selectbox("عمود الخاصية/النكهة (اختياري)", [""] + cols, index=0)
-    col_size = st.selectbox("عمود الحجم (اختياري)", [""] + cols, index=0)
-    col_unit = st.selectbox("عمود الوحدة (اختياري)", [""] + cols, index=0)
-    col_country = st.selectbox("عمود بلد المنشأ (اختياري)", [""] + cols, index=0)
-    col_storage = st.selectbox("عمود التخزين (اختياري)", [""] + cols, index=0)
-    col_uses = st.selectbox("عمود الاستخدامات (اختياري)", [""] + cols, index=0)
+    st.subheader("ربط الأعمدة (Column Mapping)")
+    col_name = st.selectbox("عمود اسم المنتج", cols, index=cols.index("raw_name") if "raw_name" in cols else 0)
 
-    st.subheader("تشغيل")
-    limit = st.number_input("اختبار على أول N صف (0 = كل الملف)", min_value=0, value=20, step=10)
-    batch_hint = st.info("نصيحة: ابدأ بـ 20–50 صف للتأكد من الجودة، ثم ارفع العدد تدريجيًا.")
+    def opt_col(label):
+        return st.selectbox(label, [""] + cols, index=0)
 
-    run = st.button("🚀 توليد العناوين والأوصاف")
+    col_brand   = opt_col("عمود الماركة (اختياري)")
+    col_type    = opt_col("عمود نوع المنتج (اختياري)")
+    col_feature = opt_col("عمود الخاصية/النكهة (اختياري)")
+    col_size    = opt_col("عمود الحجم (اختياري)")
+    col_unit    = opt_col("عمود الوحدة (اختياري)")
+    col_country = opt_col("عمود بلد المنشأ (اختياري)")
+    col_storage = opt_col("عمود التخزين (اختياري)")
+    col_uses    = opt_col("عمود الاستخدامات (اختياري)")
+
+    st.subheader("التشغيل")
+    limit = st.number_input("اختبار على أول N صف (0 = كل المنتجات)", min_value=0, value=min(20, len(df)), step=10)
+    st.caption("ابدأ بـ 20–50 منتج للتأكد من الجودة ثم زد العدد تدريجيًا.")
+
+    run = st.button("🚀 توليد العنوان والوصف")
 
     if run:
         work_df = df.copy()
         if limit and limit > 0:
             work_df = work_df.head(int(limit))
 
-        # تجهيز أعمدة الخرج
-        out_titles = []
-        out_descs = []
+        titles, descs = [], []
 
-        # كاش داخل الجلسة لتقليل الاستهلاك إذا تكررت منتجات
         if "cache" not in st.session_state:
             st.session_state["cache"] = {}
         cache = st.session_state["cache"]
 
-        prog = st.progress(0)
+        prog = st.progress(0.0)
         status = st.empty()
 
         total = len(work_df)
@@ -196,21 +231,20 @@ if uploaded:
             if k in cache:
                 data = cache[k]
             else:
-                user_input = build_user_input(row)
-                data = call_openai_structured(user_input)
+                data = call_openai_structured(build_user_input(row))
                 cache[k] = data
 
-            out_titles.append(data["title"].strip())
-            out_descs.append(data["description"].strip())
+            titles.append(data["title"].strip())
+            descs.append(data["description"].strip())
 
             prog.progress(i / total)
             status.write(f"تمت معالجة {i}/{total}")
 
-        work_df["generated_title"] = out_titles
-        work_df["generated_description"] = out_descs
+        work_df["generated_title"] = titles
+        work_df["generated_description"] = descs
 
-        st.success("✅ انتهينا!")
-        st.dataframe(work_df.head(20), use_container_width=True)
+        st.success("✅ تم إنشاء العناوين والأوصاف!")
+        st.dataframe(work_df.head(30), use_container_width=True)
 
         out_csv = work_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
         st.download_button(
@@ -219,6 +253,3 @@ if uploaded:
             file_name="products_out.csv",
             mime="text/csv",
         )
-
-else:
-    st.info("ارفع ملف CSV للبدء.")
