@@ -10,15 +10,15 @@ from openai import OpenAI
 # PAGE
 # =========================
 st.set_page_config(page_title="مولّد عناوين وأوصاف المنتجات", layout="wide")
-st.title("مولّد عناوين وأوصاف المنتجات (قائمة مباشرة)")
-st.caption("ألصق قائمة منتجات (كل سطر منتج) → توليد سريع Batch=30 → تنزيل النتائج")
+st.title("مولّد عناوين وأوصاف المنتجات (سريع – Batch=30)")
+st.caption("ألصق قائمة منتجات (كل سطر منتج) ← توليد سريع ← تنزيل النتائج")
 
 # =========================
 # API KEY
 # =========================
 api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 if not api_key:
-    st.error("ضع OPENAI_API_KEY في Streamlit Secrets: Manage app → Settings → Secrets")
+    st.error("❌ ضع OPENAI_API_KEY في Streamlit Secrets (Manage app → Settings → Secrets)")
     st.stop()
 
 client = OpenAI(api_key=api_key)
@@ -29,7 +29,7 @@ client = OpenAI(api_key=api_key)
 MODEL = st.selectbox("Model", ["gpt-4o-mini", "gpt-4o"], index=0)
 temperature = st.slider("Temperature", 0.0, 1.0, 0.7, 0.05)
 
-BATCH_SIZE = 30  # كما طلبت
+BATCH_SIZE = 30
 
 SYSTEM_PROMPT = """
 أنت خبير محتوى منتجات لسوبرماركت عربي كبير.
@@ -59,13 +59,13 @@ BATCH_SCHEMA = {
                 "properties": {
                     "raw_name": {"type": "string", "minLength": 2, "maxLength": 300},
                     "title": {"type": "string", "minLength": 10, "maxLength": 95},
-                    "description": {"type": "string", "minLength": 120, "maxLength": 900},
+                    "description": {"type": "string", "minLength": 120, "maxLength": 900}
                 },
-                "required": ["raw_name", "title", "description"],
-            },
+                "required": ["raw_name", "title", "description"]
+            }
         }
     },
-    "required": ["items"],
+    "required": ["items"]
 }
 
 # =========================
@@ -78,11 +78,10 @@ def chunk_list(lst, n):
     for i in range(0, len(lst), n):
         yield lst[i:i+n]
 
-def build_batch_user_input(product_names: list[str]) -> str:
-    # نجعل الطلب واضح جدًا + يقلل التكرار
+def build_batch_user_input(product_names):
     joined = "\n".join([f"- {p}" for p in product_names])
     return f"""
-هذه قائمة منتجات. أعد JSON فقط بالشكل:
+أعد JSON فقط بهذا الشكل:
 {{
   "items": [
     {{"raw_name":"..","title":"..","description":".."}}
@@ -90,19 +89,20 @@ def build_batch_user_input(product_names: list[str]) -> str:
 }}
 
 القواعد:
-1) title: عنوان عربي SEO-friendly بصيغة طبيعية (نوع + ماركة + خاصية + حجم إن وُجد).
-2) description:
-   - 2 إلى 4 جمل مفيدة ومحددة (بدون جمل عامة مكررة)
+1) انسخ raw_name كما هو تمامًا بدون أي تعديل.
+2) title: عنوان عربي SEO-friendly (نوع + ماركة + خاصية + حجم إن وُجد).
+3) description:
+   - 2 إلى 4 جمل مفيدة ومحددة
    - ثم "الاستخدامات:" (3 نقاط)
    - ثم "المواصفات:" (نقاط مختصرة)
-3) لا ادعاءات غير مؤكدة.
-4) اجعل الصياغة مختلفة قدر الإمكان بين المنتجات.
+4) ممنوع الجمل العامة المكررة أو الادعاءات غير المؤكدة.
+5) اجعل الصياغة مختلفة قدر الإمكان بين المنتجات.
 
 المنتجات:
 {joined}
 """.strip()
 
-def call_openai_batch(product_names: list[str], retries: int = 6):
+def call_openai_batch(product_names, retries=6):
     user_input = build_batch_user_input(product_names)
     last_err = None
 
@@ -112,19 +112,21 @@ def call_openai_batch(product_names: list[str], retries: int = 6):
                 model=MODEL,
                 input=[
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_input},
+                    {"role": "user", "content": user_input}
                 ],
                 text={
                     "format": {
                         "type": "json_schema",
+                        "name": "products_batch",
                         "strict": True,
-                        "schema": BATCH_SCHEMA,
+                        "schema": BATCH_SCHEMA
                     }
                 },
                 temperature=temperature,
             )
             data = json.loads(resp.output_text)
             return data["items"]
+
         except Exception as e:
             last_err = e
             time.sleep(1.2 * (2 ** attempt))
@@ -135,12 +137,12 @@ def call_openai_batch(product_names: list[str], retries: int = 6):
 # UI INPUT
 # =========================
 st.subheader("📝 أدخل قائمة المنتجات")
-st.caption("كل سطر = منتج واحد. (السرعة تعتمد على عدد الأسطر)")
+st.caption("كل سطر = منتج واحد")
 
 products_text = st.text_area(
     "Paste هنا",
     height=240,
-    placeholder="مثال:\nالمراعي حليب كامل الدسم 1 لتر\nنيفيا لوشن جسم ألوفيرا 400 مل\n..."
+    placeholder="مثال:\nالمراعي حليب كامل الدسم 1 لتر\nنيفيا لوشن جسم ألوفيرا 400 مل"
 )
 
 col1, col2, col3 = st.columns([1, 1, 2])
@@ -149,7 +151,7 @@ with col1:
 with col2:
     limit = st.number_input("اختبار على أول N (0 = الكل)", min_value=0, value=30, step=10)
 with col3:
-    st.info("نصيحة: جرّب 30–60 منتج أولًا، ثم زد العدد تدريجيًا.")
+    st.info("ابدأ بـ 30 منتج، ثم زد العدد تدريجيًا.")
 
 # =========================
 # RUN
@@ -157,29 +159,26 @@ with col3:
 if run:
     products = [p.strip() for p in (products_text or "").splitlines() if p.strip()]
     if not products:
-        st.warning("أدخل منتجًا واحدًا على الأقل.")
+        st.warning("⚠️ أدخل منتجًا واحدًا على الأقل.")
         st.stop()
 
     if limit and limit > 0:
-        products = products[: int(limit)]
+        products = products[:int(limit)]
 
-    # Cache داخل الجلسة
     if "cache" not in st.session_state:
         st.session_state["cache"] = {}
     cache = st.session_state["cache"]
 
-    # نفصل المنتجات إلى:
-    # - منتجات موجودة بالكاش
-    # - منتجات جديدة تحتاج توليد
     results = []
     to_generate = []
+
     for p in products:
         k = stable_key(p)
         if k in cache:
             results.append({
                 "raw_name": p,
                 "generated_title": cache[k]["title"],
-                "generated_description": cache[k]["description"],
+                "generated_description": cache[k]["description"]
             })
         else:
             to_generate.append(p)
@@ -190,21 +189,15 @@ if run:
     prog = st.progress(done / total if total else 0.0)
     status = st.empty()
 
-    # توليد على دفعات 30
     try:
         for batch in chunk_list(to_generate, BATCH_SIZE):
-            status.write(f"جاري توليد دفعة: {len(batch)} منتج...")
-
+            status.write(f"جاري توليد دفعة ({len(batch)} منتج)...")
             items = call_openai_batch(batch)
 
-            # نُرجع النتائج بنفس raw_name (في حال تغيّرت الترتيبات)
             for it in items:
-                raw = (it.get("raw_name") or "").strip()
-                title = (it.get("title") or "").strip()
-                desc = (it.get("description") or "").strip()
-
-                if not raw:
-                    continue
+                raw = it["raw_name"].strip()
+                title = it["title"].strip()
+                desc = it["description"].strip()
 
                 k = stable_key(raw)
                 cache[k] = {"title": title, "description": desc}
@@ -212,19 +205,18 @@ if run:
                 results.append({
                     "raw_name": raw,
                     "generated_title": title,
-                    "generated_description": desc,
+                    "generated_description": desc
                 })
 
                 done += 1
                 prog.progress(min(done / total, 1.0))
                 status.write(f"تمت معالجة {done}/{total}")
 
-        # ترتيب النتائج حسب ترتيب الإدخال الأصلي
         order = {p: i for i, p in enumerate(products)}
         results.sort(key=lambda x: order.get(x["raw_name"], 10**9))
 
         df = pd.DataFrame(results)
-        st.success("✅ تم توليد العناوين والأوصاف بسرعة (Batch=30)")
+        st.success("✅ تم التوليد بنجاح وبسرعة")
         st.dataframe(df, use_container_width=True)
 
         csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
@@ -232,10 +224,10 @@ if run:
             "⬇️ تنزيل النتائج CSV",
             data=csv_bytes,
             file_name="products_generated.csv",
-            mime="text/csv",
+            mime="text/csv"
         )
 
     except Exception as e:
-        st.error("❌ فشل استدعاء OpenAI. هذا هو الخطأ الحقيقي:")
+        st.error("❌ فشل استدعاء OpenAI. الخطأ الحقيقي:")
         st.code(str(e))
         st.stop()
