@@ -26,7 +26,7 @@ client = OpenAI(api_key=api_key)
 # =========================
 # SETTINGS
 # =========================
-MODEL = "gpt-4.1-mini"
+MODEL = "gpt-4o-mini"
 temperature = 0.7
 
 SYSTEM_PROMPT = """أنت خبير محتوى منتجات لسوبرماركت عربي كبير.
